@@ -1,0 +1,13 @@
+/run/
+/out/
+/logs/
+/build/
+/bin/
+/.settings/
+/.gradle/
+/.kotlin/
+/.github
+/.vscode
+/.idea/
+gradlew
+s
