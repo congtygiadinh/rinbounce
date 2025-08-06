@@ -1,0 +1,115 @@
+name: Build
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      lb_version: ${{ steps.version.outputs.LB_VERSION }}
+      jar_name: ${{ steps.prep.outputs.jar_name }}
+
+    steps:
+      - name: Checkout repository and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Java 8 (AdoptOpenJDK)
+        uses: actions/setup-java@v4
+        with:
+          distribution: "adopt"
+          java-version: 8
+          cache: "gradle"
+
+      - name: Read version from src/main/resources/version.txt
+        id: version
+        run: |
+          LB_VERSION=$(cat src/main/resources/version.txt | tr -d ' \n\r')
+          echo "LB_VERSION=$LB_VERSION" >> $GITHUB_OUTPUT
+          echo "LB_VERSION=$LB_VERSION" >> $GITHUB_ENV
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
+      - name: Delete old build JARs
+        run: rm -f ./build/libs/*.jar || true
+
+      - name: Build (no tests, parallel, daemon)
+        run: ./gradlew build --stacktrace
+
+      - name: Prepare artifact and get jar name
+        id: prep
+        run: |
+          cd build/libs
+          JAR=$(find . -name "*.jar" | grep "rinbounce" | head -n1)
+          if [ -z "$JAR" ]; then
+            echo "No .jar file found! Build failed."
+            exit 1
+          fi
+          MINECRAFT_VERSION="1.8.9"
+          COMMIT_HASH=$(git rev-parse --short HEAD)
+          ARTIFACT_NAME="rinbounce-${{ env.LB_VERSION }}-mc$MINECRAFT_VERSION-$COMMIT_HASH.jar"
+          mkdir -p ../../artifacts
+          cp "$JAR" "../../artifacts/$ARTIFACT_NAME"
+          echo "jar_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+
+      - name: Upload all artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: RinBounce-Artifacts
+          path: artifacts
+          retention-days: 1
+
+  discord_webhook:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: RinBounce-Artifacts
+          path: ./artifacts
+
+      - name: Check artifacts exist
+        run: |
+          if [ ! -d "./artifacts" ] || [ -z "$(ls -A ./artifacts)" ]; then
+            echo "Artifacts directory is empty!"
+            exit 1
+          fi
+
+      - name: Send Discord notification with artifact
+        env:
+          WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK }}
+          VERSION: ${{ needs.build.outputs.lb_version }}
+          JAR_NAME: ${{ needs.build.outputs.jar_name }}
+        run: |
+          ARTIFACT_PATH="./artifacts/$JAR_NAME"
+          curl -F "file=@$ARTIFACT_PATH" \
+               -H "Content-Type: multipart/form-data" \
+               -F 'payload_json={
+                 "embeds": [{
+                   "title": "🚀 RinBounce Beta Build Successful!",
+                   "description": "A new beta version of RinBounce has been built and attached.",
+                   "color": 5814783,
+                   "fields": [
+                     {
+                       "name": "Version",
+                       "value": "'"$VERSION"'",
+                       "inline": true
+                     },
+                     {
+                       "name": "File",
+                       "value": "'"$JAR_NAME"'",
+                       "inline": true
+                     }
+                   ],
+                   "footer": {
+                     "text": "Automated build by GitHub Actions"
+                   },
+                   "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"
+                 }]
+               }' \
+               "$WEBHOOK_URL"

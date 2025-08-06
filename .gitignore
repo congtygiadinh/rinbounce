@@ -6,8 +6,6 @@
 /.settings/
 /.gradle/
 /.kotlin/
-/.github
-/.vscode
+/.vscode/
 /.idea/
 gradlew
-s
